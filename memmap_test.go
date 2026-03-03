@@ -918,3 +918,44 @@ func TestMemMapFsRename(t *testing.T) {
 		}
 	}
 }
+
+func TestMemMapFsCreateOpenRemove(t *testing.T) {
+	t.Parallel()
+
+	fs := NewMemMapFs()
+
+	fn := "test.txt"
+	f, err := fs.Create(fn)
+	if err != nil {
+		t.Fatalf("Create failed: %s", err)
+	}
+	defer f.Close()
+
+	f2, err := fs.Open(fn)
+	if err != nil {
+		t.Fatalf("Open failed: %s", err)
+	}
+	defer f2.Close()
+
+	err = fs.Remove(fn)
+	if err != nil {
+		t.Fatalf("Remove failed: %s", err)
+	}
+
+	d := []byte("helloworld")
+	n, err := f.Write(d)
+	if err != nil || n != len(d) {
+		t.Fatalf("Write failed: %s, actual=%d, expected=%s", err, n, string(d))
+	}
+
+	p := make([]byte, len(d))
+	n, err = f2.Read(p)
+	if err != nil || n != len(d) || string(p) != string(d) {
+		t.Fatalf("Write failed: %s, actual=%s, expected=%s", err, string(p), string(d))
+	}
+
+	_, err = fs.Open(fn)
+	if !os.IsNotExist(err) {
+		t.Fatalf("File was not removed: %s", err)
+	}
+}
