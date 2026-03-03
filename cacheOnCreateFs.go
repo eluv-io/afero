@@ -145,6 +145,10 @@ func (u *CacheOnCreateFs) OpenFile(name string, flag int, perm os.FileMode) (f F
 		return nil, err
 	}
 
+	if flag&os.O_CREATE > 0 {
+		u.cacheFile(name)
+	}
+
 	if bf == nil && lf == nil {
 		// Does not exist in both base and layer; return error
 		return nil, os.ErrNotExist
@@ -154,12 +158,22 @@ func (u *CacheOnCreateFs) OpenFile(name string, flag int, perm os.FileMode) (f F
 	} else if bf == nil && lf != nil {
 		// Only exists in layer; use layer
 		return lf, nil
-	} else if flag&wrFlags == 0 {
-		// Exists in both base and layer and is read only; use layer
+	} else if flag&wrFlags > 0 {
+		// Exists in both base and layer and is not read only; use union
+		return &UnionFile{Base: bf, Layer: lf}, nil
+	}
+
+	fi, err := lf.Stat()
+	if err != nil {
+		_ = lf.Close()
+		_ = bf.Close()
+		return nil, err
+	} else if !fi.IsDir() {
+		// Exists in both base and layer, is read only, and is not directory; use layer
 		_ = bf.Close()
 		return lf, nil
 	} else {
-		// Exists in both base and layer and is not read only; use union
+		// Exists in both base and layer, is read only, and is directory; use union
 		return &UnionFile{Base: bf, Layer: lf}, nil
 	}
 }

@@ -42,7 +42,7 @@ func TestCacheOnCreate(t *testing.T) {
 
 	fp = filepath.Join(dir, "test1-0.txt")
 	fp2 := filepath.Join(dir, "test1-1.txt")
-	d = []byte("eluvio")
+	d = []byte("helloworld")
 	// Create file in composite fs
 	f = requireFileCreate(t, composite, fp, d)
 	if runtime.GOOS == "windows" {
@@ -71,7 +71,33 @@ func TestCacheOnCreate(t *testing.T) {
 		requireFileRead(t, f, d)
 	}
 
-	fp = filepath.Join(dir, "test2.txt")
+	fp = filepath.Join(dir, "test2-orig.txt")
+	fp2 = filepath.Join(dir, "test2-link.txt")
+	d = []byte("helloworld")
+	// Create file in composite fs
+	f = requireFileCreate(t, composite, fp, d)
+	// Link file in composite fs
+	requireFileLink(t, composite, fp, fp2)
+	// File should exist in all fs at both old path and new path
+	requireFileExist(t, composite, fp, d)
+	requireFileExist(t, composite, fp2, d)
+	requireFileExist(t, layer, fp, d)
+	requireFileExist(t, layer, fp2, d)
+	requireFileExist(t, base, fp, d)
+	requireFileExist(t, base, fp2, d)
+	// Allow linked file in layer fs to expire
+	time.Sleep(cacheTime * 2)
+	// File should exist in composite fs and base fs but not layer fs at both old path and new path
+	requireFileExist(t, composite, fp, d)
+	requireFileExist(t, composite, fp2, d)
+	requireFileNotExist(t, layer, fp)
+	requireFileNotExist(t, layer, fp2)
+	requireFileExist(t, base, fp, d)
+	requireFileExist(t, base, fp2, d)
+	// Original file handle should still work
+	requireFileRead(t, f, d)
+
+	fp = filepath.Join(dir, "test3.txt")
 	d = []byte("test_base")
 	d2 := []byte("test_layer")
 	// File should not exist yet in any fs
@@ -120,7 +146,7 @@ func TestCacheOnCreate(t *testing.T) {
 	requireFileNotExist(t, layer, fp)
 	requireFileNotExist(t, base, fp)
 
-	fp = filepath.Join(dir, "test3.txt")
+	fp = filepath.Join(dir, "test4.txt")
 	d = []byte("test_base")
 	d2 = []byte("test_layer")
 	d3 := append(d, d2...)
@@ -130,10 +156,16 @@ func TestCacheOnCreate(t *testing.T) {
 	// Create file in composite fs
 	f = requireFileOpen(t, composite, fp, os.O_CREATE|os.O_RDWR, d, nil)
 	requireFileRead(t, f, d)
-	// File should exist in composite fs
+	// File should exist in all fs
 	requireFileExist(t, composite, fp, d)
-	// Reset file
-	requireFileRemove(t, composite, fp, nil)
+	requireFileExist(t, layer, fp, d)
+	requireFileExist(t, base, fp, d)
+	// Allow renamed file in layer fs to expire
+	time.Sleep(cacheTime * 2)
+	// File should exist in composite fs and base fs but not layer fs
+	requireFileExist(t, composite, fp, d)
+	requireFileNotExist(t, layer, fp)
+	requireFileExist(t, base, fp, d)
 	// Create file in base fs
 	f = requireFileOpen(t, base, fp, os.O_CREATE|os.O_RDWR, d, nil)
 	requireFileRead(t, f, d)
@@ -182,10 +214,12 @@ func TestCacheOnCreate(t *testing.T) {
 	requireFileExist(t, base, fp, d3)
 	// Reset file
 	requireFileRemove(t, composite, fp, nil)
-	// File should not exist in composite fs
+	// File should not exist in any fs
 	requireFileNotExist(t, composite, fp)
+	requireFileNotExist(t, layer, fp)
+	requireFileNotExist(t, base, fp)
 
-	dp := filepath.Join(dir, "test4")
+	dp := filepath.Join(dir, "test5")
 	dp2 := filepath.Join(dp, "data")
 	fp = filepath.Join(dp2, "0.txt")
 	fp2 = filepath.Join(dp2, "1.txt")
@@ -293,6 +327,11 @@ func requireFileRename(t *testing.T, fs Fs, oldFp string, newFp string) {
 	require.NoError(t, err)
 }
 
+func requireFileLink(t *testing.T, fs Fs, oldFp string, newFp string) {
+	err := fs.Link(oldFp, newFp)
+	require.NoError(t, err)
+}
+
 func requireFileRemove(t *testing.T, fs Fs, fp string, fn func(error) bool) {
 	err := fs.Remove(fp)
 	if fn == nil {
@@ -309,16 +348,24 @@ func requireDirMake(t *testing.T, fs Fs, dp string) {
 }
 
 func requireDirRead(t *testing.T, fs Fs, dp string, files map[string][]byte) {
-	f, err := fs.Open(dp)
-	require.NoError(t, err)
-	require.NotNil(t, f)
-	fis, err := f.Readdir(0)
-	require.NoError(t, err)
-	require.NotEmpty(t, fis)
-	require.Len(t, fis, len(files))
-	for _, fi := range fis {
-		fp := filepath.Join(dp, fi.Name())
-		require.Contains(t, files, fp)
-		require.Equal(t, int64(len(files[fp])), fi.Size())
+	open := func(name string) (File, error) {
+		return fs.Open(name)
+	}
+	openFile := func(name string) (File, error) {
+		return fs.OpenFile(name, os.O_RDONLY, 0o666)
+	}
+	for _, fn := range []func(string) (File, error){open, openFile} {
+		f, err := fn(dp)
+		require.NoError(t, err)
+		require.NotNil(t, f)
+		fis, err := f.Readdir(0)
+		require.NoError(t, err)
+		require.NotEmpty(t, fis)
+		require.Len(t, fis, len(files))
+		for _, fi := range fis {
+			fp := filepath.Join(dp, fi.Name())
+			require.Contains(t, files, fp)
+			require.Equal(t, int64(len(files[fp])), fi.Size())
+		}
 	}
 }
