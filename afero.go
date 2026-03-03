@@ -84,6 +84,9 @@ type Fs interface {
 	// Rename renames a file.
 	Rename(oldname, newname string) error
 
+	// Link creates a hardlink to a file.
+	Link(oldname, newname string) error
+
 	// Stat returns a FileInfo describing the named file, or an error, if any
 	// happens.
 	Stat(name string) (os.FileInfo, error)

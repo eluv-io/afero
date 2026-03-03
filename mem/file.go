@@ -55,9 +55,9 @@ func (f File) Data() *FileData {
 }
 
 type FileData struct {
-	sync.Mutex
+	sync.RWMutex
 	name    string
-	data    []byte
+	data    *fileBytes
 	memDir  Dir
 	dir     bool
 	mode    os.FileMode
@@ -66,18 +66,51 @@ type FileData struct {
 	gid     int
 }
 
+func (d *FileData) duplicate() *FileData {
+	return &FileData{
+		name:    d.name,
+		data:    d.data,
+		memDir:  d.memDir,
+		dir:     d.dir,
+		mode:    d.mode,
+		modtime: d.modtime,
+		uid:     d.uid,
+		gid:     d.gid,
+	}
+}
+
 func (d *FileData) Name() string {
-	d.Lock()
-	defer d.Unlock()
+	d.RLock()
+	defer d.RUnlock()
 	return d.name
 }
 
 func CreateFile(name string) *FileData {
-	return &FileData{name: name, mode: os.ModeTemporary, modtime: time.Now()}
+	return &FileData{
+		name:    name,
+		data:    &fileBytes{},
+		mode:    os.ModeTemporary,
+		modtime: time.Now(),
+	}
 }
 
 func CreateDir(name string) *FileData {
-	return &FileData{name: name, memDir: &DirMap{}, dir: true, modtime: time.Now()}
+	return &FileData{
+		name:    name,
+		data:    &fileBytes{},
+		memDir:  &DirMap{},
+		dir:     true,
+		modtime: time.Now(),
+	}
+}
+
+func CreateLink(f *FileData, newname string) *FileData {
+	f.Lock()
+	f2 := f.duplicate()
+	f2.name = newname
+	f2.data.m = &sync.RWMutex{}
+	f.Unlock()
+	return f2
 }
 
 func ChangeFileName(f *FileData, newname string) {
@@ -159,7 +192,7 @@ func (f *File) Readdir(count int) (res []os.FileInfo, err error) {
 	}
 	var outLength int64
 
-	f.fileData.Lock()
+	f.fileData.RLock()
 	if f.dirBuf == nil {
 		f.dirBuf = f.fileData.memDir.Files()
 	}
@@ -177,7 +210,7 @@ func (f *File) Readdir(count int) (res []os.FileInfo, err error) {
 		outLength = int64(len(files))
 	}
 	f.readDirCount += outLength
-	f.fileData.Unlock()
+	f.fileData.RUnlock()
 
 	res = make([]os.FileInfo, outLength)
 	for i := range res {
@@ -210,23 +243,25 @@ func (f *File) ReadDir(n int) ([]fs.DirEntry, error) {
 }
 
 func (f *File) Read(b []byte) (n int, err error) {
-	f.fileData.Lock()
-	defer f.fileData.Unlock()
+	f.fileData.RLock()
+	defer f.fileData.RUnlock()
 	if f.closed {
 		return 0, ErrFileClosed
 	}
-	if len(b) > 0 && int(f.at) == len(f.fileData.data) {
+	f.fileData.data.RLock()
+	defer f.fileData.data.RUnlock()
+	if len(b) > 0 && int(f.at) == len(f.fileData.data.d) {
 		return 0, io.EOF
 	}
-	if int(f.at) > len(f.fileData.data) {
+	if int(f.at) > len(f.fileData.data.d) {
 		return 0, io.ErrUnexpectedEOF
 	}
-	if len(f.fileData.data)-int(f.at) >= len(b) {
+	if len(f.fileData.data.d)-int(f.at) >= len(b) {
 		n = len(b)
 	} else {
-		n = len(f.fileData.data) - int(f.at)
+		n = len(f.fileData.data.d) - int(f.at)
 	}
-	copy(b, f.fileData.data[f.at:f.at+int64(n)])
+	copy(b, f.fileData.data.d[f.at:f.at+int64(n)])
 	atomic.AddInt64(&f.at, int64(n))
 	return
 }
@@ -255,11 +290,13 @@ func (f *File) Truncate(size int64) error {
 	}
 	f.fileData.Lock()
 	defer f.fileData.Unlock()
-	if size > int64(len(f.fileData.data)) {
-		diff := size - int64(len(f.fileData.data))
-		f.fileData.data = append(f.fileData.data, bytes.Repeat([]byte{0o0}, int(diff))...)
+	f.fileData.data.Lock()
+	defer f.fileData.data.Unlock()
+	if size > int64(len(f.fileData.data.d)) {
+		diff := size - int64(len(f.fileData.data.d))
+		f.fileData.data.d = append(f.fileData.data.d, bytes.Repeat([]byte{0o0}, int(diff))...)
 	} else {
-		f.fileData.data = f.fileData.data[0:size]
+		f.fileData.data.d = f.fileData.data.d[0:size]
 	}
 	setModTime(f.fileData, time.Now())
 	return nil
@@ -275,7 +312,9 @@ func (f *File) Seek(offset int64, whence int) (int64, error) {
 	case io.SeekCurrent:
 		atomic.AddInt64(&f.at, offset)
 	case io.SeekEnd:
-		atomic.StoreInt64(&f.at, int64(len(f.fileData.data))+offset)
+		f.fileData.data.RLock()
+		atomic.StoreInt64(&f.at, int64(len(f.fileData.data.d))+offset)
+		f.fileData.data.RUnlock()
 	}
 	return f.at, nil
 }
@@ -295,19 +334,21 @@ func (f *File) Write(b []byte) (n int, err error) {
 	cur := atomic.LoadInt64(&f.at)
 	f.fileData.Lock()
 	defer f.fileData.Unlock()
-	diff := cur - int64(len(f.fileData.data))
+	f.fileData.data.Lock()
+	defer f.fileData.data.Unlock()
+	diff := cur - int64(len(f.fileData.data.d))
 	var tail []byte
-	if n+int(cur) < len(f.fileData.data) {
-		tail = f.fileData.data[n+int(cur):]
+	if n+int(cur) < len(f.fileData.data.d) {
+		tail = f.fileData.data.d[n+int(cur):]
 	}
 	if diff > 0 {
-		f.fileData.data = append(
-			f.fileData.data,
+		f.fileData.data.d = append(
+			f.fileData.data.d,
 			append(bytes.Repeat([]byte{0o0}, int(diff)), b...)...)
-		f.fileData.data = append(f.fileData.data, tail...)
+		f.fileData.data.d = append(f.fileData.data.d, tail...)
 	} else {
-		f.fileData.data = append(f.fileData.data[:cur], b...)
-		f.fileData.data = append(f.fileData.data, tail...)
+		f.fileData.data.d = append(f.fileData.data.d[:cur], b...)
+		f.fileData.data.d = append(f.fileData.data.d, tail...)
 	}
 	setModTime(f.fileData, time.Now())
 
@@ -334,27 +375,27 @@ type FileInfo struct {
 
 // Implements os.FileInfo
 func (s *FileInfo) Name() string {
-	s.Lock()
+	s.RLock()
 	_, name := filepath.Split(s.name)
-	s.Unlock()
+	s.RUnlock()
 	return name
 }
 
 func (s *FileInfo) Mode() os.FileMode {
-	s.Lock()
-	defer s.Unlock()
+	s.RLock()
+	defer s.RUnlock()
 	return s.mode
 }
 
 func (s *FileInfo) ModTime() time.Time {
-	s.Lock()
-	defer s.Unlock()
+	s.RLock()
+	defer s.RUnlock()
 	return s.modtime
 }
 
 func (s *FileInfo) IsDir() bool {
-	s.Lock()
-	defer s.Unlock()
+	s.RLock()
+	defer s.RUnlock()
 	return s.dir
 }
 func (s *FileInfo) Sys() interface{} { return nil }
@@ -362,9 +403,40 @@ func (s *FileInfo) Size() int64 {
 	if s.IsDir() {
 		return int64(42)
 	}
-	s.Lock()
-	defer s.Unlock()
-	return int64(len(s.data))
+	s.RLock()
+	defer s.RUnlock()
+	s.data.RLock()
+	defer s.data.RUnlock()
+	return int64(len(s.data.d))
+}
+
+type fileBytes struct {
+	d []byte
+	m *sync.RWMutex
+}
+
+func (b *fileBytes) Lock() {
+	if b.m != nil {
+		b.m.Lock()
+	}
+}
+
+func (b *fileBytes) RLock() {
+	if b.m != nil {
+		b.m.RLock()
+	}
+}
+
+func (b *fileBytes) RUnlock() {
+	if b.m != nil {
+		b.m.RUnlock()
+	}
+}
+
+func (b *fileBytes) Unlock() {
+	if b.m != nil {
+		b.m.Unlock()
+	}
 }
 
 var (

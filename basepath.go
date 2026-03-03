@@ -122,6 +122,16 @@ func (b *BasePathFs) Rename(oldname, newname string) (err error) {
 	return b.source.Rename(oldname, newname)
 }
 
+func (b *BasePathFs) Link(oldname, newname string) (err error) {
+	if oldname, err = b.RealPath(oldname); err != nil {
+		return &os.PathError{Op: "link", Path: oldname, Err: err}
+	}
+	if newname, err = b.RealPath(newname); err != nil {
+		return &os.PathError{Op: "link", Path: newname, Err: err}
+	}
+	return b.source.Rename(oldname, newname)
+}
+
 func (b *BasePathFs) RemoveAll(name string) (err error) {
 	if name, err = b.RealPath(name); err != nil {
 		return &os.PathError{Op: "remove_all", Path: name, Err: err}

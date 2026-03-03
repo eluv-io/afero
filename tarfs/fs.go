@@ -118,6 +118,8 @@ func (fs *Fs) RemoveAll(path string) error { return syscall.EROFS }
 
 func (fs *Fs) Rename(oldname string, newname string) error { return syscall.EROFS }
 
+func (fs *Fs) Link(oldname string, newname string) error { return syscall.EROFS }
+
 func (fs *Fs) Stat(name string) (os.FileInfo, error) {
 	d, f := splitpath(name)
 	if _, ok := fs.files[d]; !ok {

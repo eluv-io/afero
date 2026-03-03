@@ -64,6 +64,10 @@ func (r *ReadOnlyFs) Rename(o, n string) error {
 	return syscall.EPERM
 }
 
+func (r *ReadOnlyFs) Link(o, n string) error {
+	return syscall.EPERM
+}
+
 func (r *ReadOnlyFs) RemoveAll(p string) error {
 	return syscall.EPERM
 }

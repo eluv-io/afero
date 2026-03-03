@@ -376,6 +376,52 @@ func (m *MemMapFs) renameDescendants(oldname, newname string) error {
 	return nil
 }
 
+func (m *MemMapFs) Link(oldname, newname string) error {
+	oldname = normalizePath(oldname)
+	newname = normalizePath(newname)
+
+	if oldname == newname {
+		return nil
+	}
+
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if _, ok := m.getData()[oldname]; ok {
+		m.mu.RUnlock()
+		m.mu.Lock()
+
+		fileData := m.getData()[oldname]
+		fileData = mem.CreateLink(fileData, newname)
+		m.getData()[newname] = fileData
+
+		err := m.linkDescendants(oldname, newname)
+		if err != nil {
+			return err
+		}
+
+		m.registerWithParent(fileData, 0)
+		m.mu.Unlock()
+		m.mu.RLock()
+	} else {
+		return &os.PathError{Op: "link", Path: oldname, Err: ErrFileNotFound}
+	}
+	return nil
+}
+
+func (m *MemMapFs) linkDescendants(oldname, newname string) error {
+	descendants := m.findDescendants(oldname)
+	for _, desc := range descendants {
+		descNewName := strings.Replace(desc.Name(), oldname, newname, 1)
+
+		fileData := mem.CreateLink(desc, descNewName)
+		m.getData()[descNewName] = fileData
+
+		m.registerWithParent(fileData, 0)
+	}
+
+	return nil
+}
+
 func (m *MemMapFs) LstatIfPossible(name string) (os.FileInfo, bool, error) {
 	fileInfo, err := m.Stat(name)
 	return fileInfo, false, err

@@ -184,6 +184,18 @@ func (u *CacheOnCreateFs) Rename(oldname, newname string) (err error) {
 	return sanitize(err, true)
 }
 
+func (u *CacheOnCreateFs) Link(oldname, newname string) (err error) {
+	defer func() { err = sanitize(err) }()
+	if err = u.base.Link(oldname, newname); err != nil {
+		return err
+	}
+	err = u.layer.Link(oldname, newname)
+	if err == nil {
+		u.cacheFile(newname)
+	}
+	return sanitize(err, true)
+}
+
 func (u *CacheOnCreateFs) Chmod(name string, mode os.FileMode) (err error) {
 	defer func() { err = sanitize(err) }()
 	if err = u.base.Chmod(name, mode); err != nil {

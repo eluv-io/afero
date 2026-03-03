@@ -94,6 +94,23 @@ func (r *RegexpFs) Rename(oldname, newname string) error {
 	return r.source.Rename(oldname, newname)
 }
 
+func (r *RegexpFs) Link(oldname, newname string) error {
+	dir, err := IsDir(r.source, oldname)
+	if err != nil {
+		return err
+	}
+	if dir {
+		return nil
+	}
+	if err := r.matchesName(oldname); err != nil {
+		return err
+	}
+	if err := r.matchesName(newname); err != nil {
+		return err
+	}
+	return r.source.Link(oldname, newname)
+}
+
 func (r *RegexpFs) RemoveAll(p string) error {
 	dir, err := IsDir(r.source, p)
 	if err != nil {

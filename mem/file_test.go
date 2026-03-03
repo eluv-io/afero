@@ -142,7 +142,7 @@ func TestFileWriteAt(t *testing.T) {
 	}
 
 	expected := bytes.Repeat(testData, 5)
-	if !bytes.Equal(expected, data.data) {
+	if !bytes.Equal(expected, data.data.d) {
 		t.Fatalf("expected: %v, got: %v", expected, data.data)
 	}
 }
@@ -179,7 +179,7 @@ func TestFileDataSizeRace(t *testing.T) {
 	const someOtherDataSize = "Hello World"
 
 	d := FileData{
-		data: []byte(someData),
+		data: &fileBytes{d: []byte(someData)},
 		dir:  false,
 	}
 
@@ -193,7 +193,7 @@ func TestFileDataSizeRace(t *testing.T) {
 
 	go func() {
 		s.Lock()
-		d.data = []byte(someOtherDataSize)
+		d.data = &fileBytes{d: []byte(someOtherDataSize)}
 		s.Unlock()
 	}()
 
