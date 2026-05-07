@@ -108,7 +108,9 @@ func CreateLink(f *FileData, newname string) *FileData {
 	f.Lock()
 	f2 := f.duplicate()
 	f2.name = newname
-	f2.data.m = &sync.RWMutex{}
+	if f2.data.m == nil { // m may be non-nil if creating a link of a link
+		f2.data.m = &sync.RWMutex{}
+	}
 	f.Unlock()
 	return f2
 }
