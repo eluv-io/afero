@@ -66,7 +66,7 @@ func (m *MemMapFs) Create(name string) (File, error) {
 		m.created.Add(1)
 	}
 	if m.log != nil {
-		m.log.Trace("created", "name", name)
+		m.log.Trace("file created", "name", name)
 	}
 	m.mu.Unlock()
 	return mem.NewFileHandle(file), nil
@@ -303,7 +303,7 @@ func (m *MemMapFs) Remove(name string) error {
 				m.removed.Add(1)
 			}
 			if m.log != nil {
-				m.log.Trace("removed", "name", name)
+				m.log.Trace("file removed", "name", name)
 			}
 		}
 	} else {
@@ -332,7 +332,7 @@ func (m *MemMapFs) RemoveAll(path string) error {
 					m.removed.Add(1)
 				}
 				if m.log != nil {
-					m.log.Trace("removed", "name", p)
+					m.log.Trace("file removed", "name", p)
 				}
 			}
 			m.mu.Unlock()
@@ -381,7 +381,7 @@ func (m *MemMapFs) Rename(oldname, newname string) error {
 				m.created.Add(1)
 			}
 			if m.log != nil {
-				m.log.Trace("renamed", "oldname", oldname, "newname", newname)
+				m.log.Trace("file renamed", "oldname", oldname, "newname", newname)
 			}
 		}
 		m.mu.Unlock()
@@ -447,7 +447,7 @@ func (m *MemMapFs) Link(oldname, newname string) error {
 				m.created.Add(1)
 			}
 			if m.log != nil {
-				m.log.Trace("linked", "oldname", oldname, "newname", newname)
+				m.log.Trace("file linked", "oldname", oldname, "newname", newname)
 			}
 		}
 	} else {
@@ -562,9 +562,7 @@ func (m *MemMapFs) SetMetrics(created, removed Counter) {
 }
 
 func (m *MemMapFs) SetLog(log Log) {
-	if log != nil && log.IsTrace() {
-		m.log = log
-	}
+	m.log = log
 }
 
 type Counter interface {
@@ -573,5 +571,4 @@ type Counter interface {
 
 type Log interface {
 	Trace(msg string, kv ...interface{})
-	IsTrace() bool
 }
