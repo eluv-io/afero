@@ -35,6 +35,7 @@ type MemMapFs struct {
 	init    sync.Once
 	created Counter
 	removed Counter
+	log     Log
 }
 
 func NewMemMapFs() Fs {
@@ -63,6 +64,9 @@ func (m *MemMapFs) Create(name string) (File, error) {
 	m.registerWithParent(file, 0)
 	if m.created != nil {
 		m.created.Add(1)
+	}
+	if m.log != nil {
+		m.log.Trace("created", "name", name)
 	}
 	m.mu.Unlock()
 	return mem.NewFileHandle(file), nil
@@ -294,8 +298,13 @@ func (m *MemMapFs) Remove(name string) error {
 		}
 		fileData := m.getData()[name]
 		delete(m.getData(), name)
-		if !mem.GetFileInfo(fileData).IsDir() && m.removed != nil {
-			m.removed.Add(1)
+		if !mem.GetFileInfo(fileData).IsDir() {
+			if m.removed != nil {
+				m.removed.Add(1)
+			}
+			if m.log != nil {
+				m.log.Trace("removed", "name", name)
+			}
 		}
 	} else {
 		return &os.PathError{Op: "remove", Path: name, Err: os.ErrNotExist}
@@ -318,8 +327,13 @@ func (m *MemMapFs) RemoveAll(path string) error {
 			m.mu.Lock()
 			fileData := m.getData()[p]
 			delete(m.getData(), p)
-			if !mem.GetFileInfo(fileData).IsDir() && m.removed != nil {
-				m.removed.Add(1)
+			if !mem.GetFileInfo(fileData).IsDir() {
+				if m.removed != nil {
+					m.removed.Add(1)
+				}
+				if m.log != nil {
+					m.log.Trace("removed", "name", p)
+				}
 			}
 			m.mu.Unlock()
 			m.mu.RLock()
@@ -365,6 +379,9 @@ func (m *MemMapFs) Rename(oldname, newname string) error {
 			}
 			if m.created != nil {
 				m.created.Add(1)
+			}
+			if m.log != nil {
+				m.log.Trace("renamed", "oldname", oldname, "newname", newname)
 			}
 		}
 		m.mu.Unlock()
@@ -425,8 +442,13 @@ func (m *MemMapFs) Link(oldname, newname string) error {
 		m.mu.Unlock()
 		m.mu.RLock()
 
-		if !mem.GetFileInfo(fileData).IsDir() && m.created != nil {
-			m.created.Add(1)
+		if !mem.GetFileInfo(fileData).IsDir() {
+			if m.created != nil {
+				m.created.Add(1)
+			}
+			if m.log != nil {
+				m.log.Trace("linked", "oldname", oldname, "newname", newname)
+			}
 		}
 	} else {
 		return &os.PathError{Op: "link", Path: oldname, Err: ErrFileNotFound}
@@ -539,6 +561,17 @@ func (m *MemMapFs) SetMetrics(created, removed Counter) {
 	m.removed = removed
 }
 
+func (m *MemMapFs) SetLog(log Log) {
+	if log != nil && log.IsTrace() {
+		m.log = log
+	}
+}
+
 type Counter interface {
 	Add(delta float64)
+}
+
+type Log interface {
+	Trace(msg string, kv ...interface{})
+	IsTrace() bool
 }
