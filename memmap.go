@@ -30,9 +30,11 @@ import (
 const chmodBits = os.ModePerm | os.ModeSetuid | os.ModeSetgid | os.ModeSticky // Only a subset of bits are allowed to be changed. Documented under os.Chmod()
 
 type MemMapFs struct {
-	mu   sync.RWMutex
-	data map[string]*mem.FileData
-	init sync.Once
+	mu      sync.RWMutex
+	data    map[string]*mem.FileData
+	init    sync.Once
+	created Counter
+	removed Counter
 }
 
 func NewMemMapFs() Fs {
@@ -59,6 +61,9 @@ func (m *MemMapFs) Create(name string) (File, error) {
 	file := mem.CreateFile(name)
 	m.getData()[name] = file
 	m.registerWithParent(file, 0)
+	if m.created != nil {
+		m.created.Add(1)
+	}
 	m.mu.Unlock()
 	return mem.NewFileHandle(file), nil
 }
@@ -287,7 +292,11 @@ func (m *MemMapFs) Remove(name string) error {
 		if err != nil {
 			return &os.PathError{Op: "remove", Path: name, Err: err}
 		}
+		fileData := m.getData()[name]
 		delete(m.getData(), name)
+		if !mem.GetFileInfo(fileData).IsDir() && m.removed != nil {
+			m.removed.Add(1)
+		}
 	} else {
 		return &os.PathError{Op: "remove", Path: name, Err: os.ErrNotExist}
 	}
@@ -307,7 +316,11 @@ func (m *MemMapFs) RemoveAll(path string) error {
 		if p == path || strings.HasPrefix(p, path+FilePathSeparator) {
 			m.mu.RUnlock()
 			m.mu.Lock()
+			fileData := m.getData()[p]
 			delete(m.getData(), p)
+			if !mem.GetFileInfo(fileData).IsDir() && m.removed != nil {
+				m.removed.Add(1)
+			}
 			m.mu.Unlock()
 			m.mu.RLock()
 		}
@@ -345,6 +358,15 @@ func (m *MemMapFs) Rename(oldname, newname string) error {
 		delete(m.getData(), oldname)
 
 		m.registerWithParent(fileData, 0)
+
+		if !mem.GetFileInfo(fileData).IsDir() {
+			if m.removed != nil {
+				m.removed.Add(1)
+			}
+			if m.created != nil {
+				m.created.Add(1)
+			}
+		}
 		m.mu.Unlock()
 		m.mu.RLock()
 	} else {
@@ -402,6 +424,10 @@ func (m *MemMapFs) Link(oldname, newname string) error {
 		m.registerWithParent(fileData, 0)
 		m.mu.Unlock()
 		m.mu.RLock()
+
+		if !mem.GetFileInfo(fileData).IsDir() && m.created != nil {
+			m.created.Add(1)
+		}
 	} else {
 		return &os.PathError{Op: "link", Path: oldname, Err: ErrFileNotFound}
 	}
@@ -506,4 +532,13 @@ func (m *MemMapFs) List() {
 		y := mem.FileInfo{FileData: x}
 		fmt.Println(x.Name(), y.Size())
 	}
+}
+
+func (m *MemMapFs) SetMetrics(created, removed Counter) {
+	m.created = created
+	m.removed = removed
+}
+
+type Counter interface {
+	Add(delta float64)
 }
