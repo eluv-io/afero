@@ -31,14 +31,20 @@ func TestCacheOnCreate(t *testing.T) {
 	requireFileExist(t, composite, fp, d)
 	requireFileExist(t, layer, fp, d)
 	requireFileExist(t, base, fp, d)
+	// Allow cache time to elapse
+	time.Sleep(cacheTime * 2)
+	// File should exist in all fs
+	requireFileExist(t, composite, fp, d)
+	requireFileExist(t, layer, fp, d)
+	requireFileExist(t, base, fp, d)
+	// Original file handle should still work
+	requireFileRead(t, f, d) // Closes file handle
 	// Allow file in layer fs to expire
 	time.Sleep(cacheTime * 2)
 	// File should exist in composite fs and base fs but not layer fs
 	requireFileExist(t, composite, fp, d)
 	requireFileNotExist(t, layer, fp)
 	requireFileExist(t, base, fp, d)
-	// Original file handle should still work
-	requireFileRead(t, f, d)
 
 	fp = filepath.Join(dir, "test1-0.txt")
 	fp2 := filepath.Join(dir, "test1-1.txt")
@@ -87,6 +93,17 @@ func TestCacheOnCreate(t *testing.T) {
 	requireFileExist(t, base, fp2, d)
 	// Allow linked file in layer fs to expire
 	time.Sleep(cacheTime * 2)
+	// File should exist in composite fs and base fs but not layer fs at new path but not old path
+	requireFileExist(t, composite, fp, d)
+	requireFileExist(t, composite, fp2, d)
+	requireFileExist(t, layer, fp, d)
+	requireFileNotExist(t, layer, fp2)
+	requireFileExist(t, base, fp, d)
+	requireFileExist(t, base, fp2, d)
+	// Original file handle should still work
+	requireFileRead(t, f, d) // Closes file handle
+	// Allow file in layer fs to expire
+	time.Sleep(cacheTime * 2)
 	// File should exist in composite fs and base fs but not layer fs at both old path and new path
 	requireFileExist(t, composite, fp, d)
 	requireFileExist(t, composite, fp2, d)
@@ -94,8 +111,6 @@ func TestCacheOnCreate(t *testing.T) {
 	requireFileNotExist(t, layer, fp2)
 	requireFileExist(t, base, fp, d)
 	requireFileExist(t, base, fp2, d)
-	// Original file handle should still work
-	requireFileRead(t, f, d)
 
 	fp = filepath.Join(dir, "test3.txt")
 	d = []byte("test_base")

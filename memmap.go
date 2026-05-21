@@ -62,13 +62,13 @@ func (m *MemMapFs) Create(name string) (File, error) {
 	file := mem.CreateFile(name)
 	m.getData()[name] = file
 	m.registerWithParent(file, 0)
+	m.mu.Unlock()
 	if m.created != nil {
 		m.created.Add(1)
 	}
 	if m.log != nil {
 		m.log.Trace("file created", "name", name)
 	}
-	m.mu.Unlock()
 	return mem.NewFileHandle(file), nil
 }
 
@@ -289,15 +289,16 @@ func (m *MemMapFs) Remove(name string) error {
 	name = normalizePath(name)
 
 	m.mu.Lock()
-	defer m.mu.Unlock()
 
 	if _, ok := m.getData()[name]; ok {
 		err := m.unRegisterWithParent(name)
 		if err != nil {
+			m.mu.Unlock()
 			return &os.PathError{Op: "remove", Path: name, Err: err}
 		}
 		fileData := m.getData()[name]
 		delete(m.getData(), name)
+		m.mu.Unlock()
 		if !mem.GetFileInfo(fileData).IsDir() {
 			if m.removed != nil {
 				m.removed.Add(1)
@@ -307,6 +308,7 @@ func (m *MemMapFs) Remove(name string) error {
 			}
 		}
 	} else {
+		m.mu.Unlock()
 		return &os.PathError{Op: "remove", Path: name, Err: os.ErrNotExist}
 	}
 	return nil
@@ -327,6 +329,8 @@ func (m *MemMapFs) RemoveAll(path string) error {
 			m.mu.Lock()
 			fileData := m.getData()[p]
 			delete(m.getData(), p)
+			m.mu.Unlock()
+			m.mu.RLock()
 			if !mem.GetFileInfo(fileData).IsDir() {
 				if m.removed != nil {
 					m.removed.Add(1)
@@ -335,8 +339,6 @@ func (m *MemMapFs) RemoveAll(path string) error {
 					m.log.Trace("file removed", "name", p)
 				}
 			}
-			m.mu.Unlock()
-			m.mu.RLock()
 		}
 	}
 	return nil
@@ -357,6 +359,7 @@ func (m *MemMapFs) Rename(oldname, newname string) error {
 		m.mu.Lock()
 		err := m.unRegisterWithParent(oldname)
 		if err != nil {
+			m.mu.Unlock()
 			return err
 		}
 
@@ -366,12 +369,15 @@ func (m *MemMapFs) Rename(oldname, newname string) error {
 
 		err = m.renameDescendants(oldname, newname)
 		if err != nil {
+			m.mu.Unlock()
 			return err
 		}
 
 		delete(m.getData(), oldname)
 
 		m.registerWithParent(fileData, 0)
+		m.mu.Unlock()
+		m.mu.RLock()
 
 		if !mem.GetFileInfo(fileData).IsDir() {
 			if m.removed != nil {
@@ -384,8 +390,6 @@ func (m *MemMapFs) Rename(oldname, newname string) error {
 				m.log.Trace("file renamed", "oldname", oldname, "newname", newname)
 			}
 		}
-		m.mu.Unlock()
-		m.mu.RLock()
 	} else {
 		return &os.PathError{Op: "rename", Path: oldname, Err: ErrFileNotFound}
 	}
@@ -435,6 +439,7 @@ func (m *MemMapFs) Link(oldname, newname string) error {
 
 		err := m.linkDescendants(oldname, newname)
 		if err != nil {
+			m.mu.Unlock()
 			return err
 		}
 

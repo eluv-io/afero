@@ -55,7 +55,7 @@ func (f File) Data() *FileData {
 }
 
 type FileData struct {
-	sync.RWMutex
+	sync.Mutex
 	name    string
 	data    *fileBytes
 	memDir  Dir
@@ -80,8 +80,8 @@ func (d *FileData) duplicate() *FileData {
 }
 
 func (d *FileData) Name() string {
-	d.RLock()
-	defer d.RUnlock()
+	d.Lock()
+	defer d.Unlock()
 	return d.name
 }
 
@@ -194,7 +194,7 @@ func (f *File) Readdir(count int) (res []os.FileInfo, err error) {
 	}
 	var outLength int64
 
-	f.fileData.RLock()
+	f.fileData.Lock()
 	if f.dirBuf == nil {
 		f.dirBuf = f.fileData.memDir.Files()
 	}
@@ -212,7 +212,7 @@ func (f *File) Readdir(count int) (res []os.FileInfo, err error) {
 		outLength = int64(len(files))
 	}
 	f.readDirCount += outLength
-	f.fileData.RUnlock()
+	f.fileData.Unlock()
 
 	res = make([]os.FileInfo, outLength)
 	for i := range res {
@@ -245,8 +245,8 @@ func (f *File) ReadDir(n int) ([]fs.DirEntry, error) {
 }
 
 func (f *File) Read(b []byte) (n int, err error) {
-	f.fileData.RLock()
-	defer f.fileData.RUnlock()
+	f.fileData.Lock()
+	defer f.fileData.Unlock()
 	if f.closed {
 		return 0, ErrFileClosed
 	}
@@ -377,27 +377,27 @@ type FileInfo struct {
 
 // Implements os.FileInfo
 func (s *FileInfo) Name() string {
-	s.RLock()
+	s.Lock()
 	_, name := filepath.Split(s.name)
-	s.RUnlock()
+	s.Unlock()
 	return name
 }
 
 func (s *FileInfo) Mode() os.FileMode {
-	s.RLock()
-	defer s.RUnlock()
+	s.Lock()
+	defer s.Unlock()
 	return s.mode
 }
 
 func (s *FileInfo) ModTime() time.Time {
-	s.RLock()
-	defer s.RUnlock()
+	s.Lock()
+	defer s.Unlock()
 	return s.modtime
 }
 
 func (s *FileInfo) IsDir() bool {
-	s.RLock()
-	defer s.RUnlock()
+	s.Lock()
+	defer s.Unlock()
 	return s.dir
 }
 func (s *FileInfo) Sys() interface{} { return nil }
@@ -405,8 +405,8 @@ func (s *FileInfo) Size() int64 {
 	if s.IsDir() {
 		return int64(42)
 	}
-	s.RLock()
-	defer s.RUnlock()
+	s.Lock()
+	defer s.Unlock()
 	s.data.RLock()
 	defer s.data.RUnlock()
 	return int64(len(s.data.d))
