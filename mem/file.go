@@ -37,6 +37,7 @@ type File struct {
 	at           int64
 	readDirCount int64
 	dirBuf       []*FileData
+	dirBufOnce   sync.Once
 	closed       bool
 	readOnly     bool
 	fileData     *FileData
@@ -50,12 +51,12 @@ func NewReadOnlyFileHandle(data *FileData) *File {
 	return &File{fileData: data, readOnly: true}
 }
 
-func (f File) Data() *FileData {
+func (f *File) Data() *FileData {
 	return f.fileData
 }
 
 type FileData struct {
-	sync.Mutex
+	sync.RWMutex
 	name    string
 	data    *fileBytes
 	memDir  Dir
@@ -80,8 +81,8 @@ func (d *FileData) duplicate() *FileData {
 }
 
 func (d *FileData) Name() string {
-	d.Lock()
-	defer d.Unlock()
+	d.RLock()
+	defer d.RUnlock()
 	return d.name
 }
 
@@ -194,11 +195,11 @@ func (f *File) Readdir(count int) (res []os.FileInfo, err error) {
 	}
 	var outLength int64
 
-	f.fileData.Lock()
-	if f.dirBuf == nil {
+	f.fileData.RLock()
+	f.dirBufOnce.Do(func() {
 		f.dirBuf = f.fileData.memDir.Files()
-	}
-	files := f.dirBuf[f.readDirCount:]
+	})
+	files := f.dirBuf[atomic.LoadInt64(&f.readDirCount):]
 	if count > 0 {
 		if len(files) < count {
 			outLength = int64(len(files))
@@ -211,8 +212,8 @@ func (f *File) Readdir(count int) (res []os.FileInfo, err error) {
 	} else {
 		outLength = int64(len(files))
 	}
-	f.readDirCount += outLength
-	f.fileData.Unlock()
+	atomic.AddInt64(&f.readDirCount, outLength)
+	f.fileData.RUnlock()
 
 	res = make([]os.FileInfo, outLength)
 	for i := range res {
@@ -245,25 +246,26 @@ func (f *File) ReadDir(n int) ([]fs.DirEntry, error) {
 }
 
 func (f *File) Read(b []byte) (n int, err error) {
-	f.fileData.Lock()
-	defer f.fileData.Unlock()
 	if f.closed {
 		return 0, ErrFileClosed
 	}
+	cur := atomic.LoadInt64(&f.at)
+	f.fileData.RLock()
+	defer f.fileData.RUnlock()
 	f.fileData.data.RLock()
 	defer f.fileData.data.RUnlock()
-	if len(b) > 0 && int(f.at) == len(f.fileData.data.d) {
+	if len(b) > 0 && int(cur) == len(f.fileData.data.d) {
 		return 0, io.EOF
 	}
-	if int(f.at) > len(f.fileData.data.d) {
+	if int(cur) > len(f.fileData.data.d) {
 		return 0, io.ErrUnexpectedEOF
 	}
-	if len(f.fileData.data.d)-int(f.at) >= len(b) {
+	if len(f.fileData.data.d)-int(cur) >= len(b) {
 		n = len(b)
 	} else {
-		n = len(f.fileData.data.d) - int(f.at)
+		n = len(f.fileData.data.d) - int(cur)
 	}
-	copy(b, f.fileData.data.d[f.at:f.at+int64(n)])
+	copy(b, f.fileData.data.d[cur:cur+int64(n)])
 	atomic.AddInt64(&f.at, int64(n))
 	return
 }
@@ -377,36 +379,36 @@ type FileInfo struct {
 
 // Implements os.FileInfo
 func (s *FileInfo) Name() string {
-	s.Lock()
+	s.RLock()
 	_, name := filepath.Split(s.name)
-	s.Unlock()
+	s.RUnlock()
 	return name
 }
 
 func (s *FileInfo) Mode() os.FileMode {
-	s.Lock()
-	defer s.Unlock()
+	s.RLock()
+	defer s.RUnlock()
 	return s.mode
 }
 
 func (s *FileInfo) ModTime() time.Time {
-	s.Lock()
-	defer s.Unlock()
+	s.RLock()
+	defer s.RUnlock()
 	return s.modtime
 }
 
 func (s *FileInfo) IsDir() bool {
-	s.Lock()
-	defer s.Unlock()
+	s.RLock()
+	defer s.RUnlock()
 	return s.dir
 }
 func (s *FileInfo) Sys() interface{} { return nil }
 func (s *FileInfo) Size() int64 {
-	if s.IsDir() {
+	s.RLock()
+	defer s.RUnlock()
+	if s.dir {
 		return int64(42)
 	}
-	s.Lock()
-	defer s.Unlock()
 	s.data.RLock()
 	defer s.data.RUnlock()
 	return int64(len(s.data.d))
