@@ -199,7 +199,8 @@ func (f *File) Readdir(count int) (res []os.FileInfo, err error) {
 	f.dirBufOnce.Do(func() {
 		f.dirBuf = f.fileData.memDir.Files()
 	})
-	files := f.dirBuf[atomic.LoadInt64(&f.readDirCount):]
+	cur := atomic.LoadInt64(&f.readDirCount)
+	files := f.dirBuf[cur:]
 	if count > 0 {
 		if len(files) < count {
 			outLength = int64(len(files))
@@ -212,7 +213,7 @@ func (f *File) Readdir(count int) (res []os.FileInfo, err error) {
 	} else {
 		outLength = int64(len(files))
 	}
-	atomic.AddInt64(&f.readDirCount, outLength)
+	atomic.StoreInt64(&f.readDirCount, cur+outLength)
 	f.fileData.RUnlock()
 
 	res = make([]os.FileInfo, outLength)
@@ -266,7 +267,7 @@ func (f *File) Read(b []byte) (n int, err error) {
 		n = len(f.fileData.data.d) - int(cur)
 	}
 	copy(b, f.fileData.data.d[cur:cur+int64(n)])
-	atomic.AddInt64(&f.at, int64(n))
+	atomic.StoreInt64(&f.at, cur+int64(n))
 	return
 }
 
@@ -310,17 +311,19 @@ func (f *File) Seek(offset int64, whence int) (int64, error) {
 	if f.closed {
 		return 0, ErrFileClosed
 	}
+	cur := offset
 	switch whence {
 	case io.SeekStart:
-		atomic.StoreInt64(&f.at, offset)
+		atomic.StoreInt64(&f.at, cur)
 	case io.SeekCurrent:
-		atomic.AddInt64(&f.at, offset)
+		cur = atomic.AddInt64(&f.at, cur)
 	case io.SeekEnd:
 		f.fileData.data.RLock()
-		atomic.StoreInt64(&f.at, int64(len(f.fileData.data.d))+offset)
+		cur = int64(len(f.fileData.data.d)) + offset
+		atomic.StoreInt64(&f.at, cur)
 		f.fileData.data.RUnlock()
 	}
-	return f.at, nil
+	return cur, nil
 }
 
 func (f *File) Write(b []byte) (n int, err error) {
@@ -356,7 +359,7 @@ func (f *File) Write(b []byte) (n int, err error) {
 	}
 	setModTime(f.fileData, time.Now())
 
-	atomic.AddInt64(&f.at, int64(n))
+	atomic.StoreInt64(&f.at, cur+int64(n))
 	return
 }
 
