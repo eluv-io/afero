@@ -44,42 +44,44 @@ func NewCacheOnCreateFs(base Fs, layer Fs, cacheTime time.Duration) Fs {
 		refs:  &cacheRefs{},
 		ttl:   cacheTime,
 	}
-	go func() {
-		// Remove expired files in cache file list
-		// Since cache time is fixed, cache files in the list will expire in order and so can be processed in order
-		for {
-			cfile := u.files.Next()
-			if cfile == nil {
-				// Cache file list is empty; can sleep for cache time and re-check
-				time.Sleep(u.ttl)
-			} else {
-				now := time.Now()
-				if cfile.expiration.After(now) {
-					// Cache file not expired yet; wait for expiration
-					time.Sleep(cfile.expiration.Sub(now))
-				}
-				// Cache file expired
-				var retry bool
-				count, release := u.refs.Check(cfile.name)
-				if count > 0 {
-					// Layer file handle still open; retry later
-					retry = true
+	if cacheTime > 0 {
+		go func() {
+			// Remove expired files in cache file list
+			// Since cache time is fixed, cache files in the list will expire in order and so can be processed in order
+			for {
+				cfile := u.files.Next()
+				if cfile == nil {
+					// Cache file list is empty; can sleep for cache time and re-check
+					time.Sleep(u.ttl)
 				} else {
-					err := u.layer.Remove(cfile.name)
-					if err != nil && !isNotExist(err) { // Ignore file if already removed (or renamed)
-						// Log error and retry later
-						log.Warn("afero.CacheOnWriteFs: failed to remove cached file",
-							err, "file", cfile.name)
+					now := time.Now()
+					if cfile.expiration.After(now) {
+						// Cache file not expired yet; wait for expiration
+						time.Sleep(cfile.expiration.Sub(now))
+					}
+					// Cache file expired
+					var retry bool
+					count, release := u.refs.Check(cfile.name)
+					if count > 0 {
+						// Layer file handle still open; retry later
 						retry = true
+					} else {
+						err := u.layer.Remove(cfile.name)
+						if err != nil && !isNotExist(err) { // Ignore file if already removed (or renamed)
+							// Log error and retry later
+							log.Warn("afero.CacheOnCreateFs: failed to remove cached file",
+								err, "file", cfile.name)
+							retry = true
+						}
+					}
+					release()
+					if retry {
+						u.files.Add(cfile.name)
 					}
 				}
-				release()
-				if retry {
-					u.files.Add(cfile.name)
-				}
 			}
-		}
-	}()
+		}()
+	}
 	return u
 }
 
@@ -390,11 +392,10 @@ func (c *cacheRefs) incr(name string) (*cacheRef, func()) {
 	decr := func() {
 		c.mutex.Lock()
 		defer c.mutex.Unlock()
-		if cref.count > 0 {
-			cref.count--
-			return
+		cref.count--
+		if cref.count == 0 {
+			delete(c.refs, cref.name)
 		}
-		delete(c.refs, cref.name)
 	}
 	return cref, decr
 }

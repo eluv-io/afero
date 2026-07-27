@@ -360,6 +360,7 @@ func (m *MemMapFs) Rename(oldname, newname string) error {
 		err := m.unRegisterWithParent(oldname)
 		if err != nil {
 			m.mu.Unlock()
+			m.mu.RLock()
 			return err
 		}
 
@@ -370,6 +371,7 @@ func (m *MemMapFs) Rename(oldname, newname string) error {
 		err = m.renameDescendants(oldname, newname)
 		if err != nil {
 			m.mu.Unlock()
+			m.mu.RLock()
 			return err
 		}
 
@@ -440,6 +442,7 @@ func (m *MemMapFs) Link(oldname, newname string) error {
 		err := m.linkDescendants(oldname, newname)
 		if err != nil {
 			m.mu.Unlock()
+			m.mu.RLock()
 			return err
 		}
 
