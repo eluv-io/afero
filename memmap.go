@@ -16,12 +16,12 @@ package afero
 import (
 	"fmt"
 	"io"
-	"log"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/spf13/afero/mem"
@@ -79,7 +79,7 @@ func (m *MemMapFs) unRegisterWithParent(fileName string) error {
 	}
 	parent := m.findParent(f)
 	if parent == nil {
-		log.Panic("parent of ", f.Name(), " is nil")
+		return ErrFileNotFound
 	}
 
 	parent.Lock()
@@ -327,11 +327,11 @@ func (m *MemMapFs) RemoveAll(path string) error {
 		if p == path || strings.HasPrefix(p, path+FilePathSeparator) {
 			m.mu.RUnlock()
 			m.mu.Lock()
-			fileData := m.getData()[p]
+			fileData, ok := m.getData()[p]
 			delete(m.getData(), p)
 			m.mu.Unlock()
 			m.mu.RLock()
-			if !mem.GetFileInfo(fileData).IsDir() {
+			if ok && !mem.GetFileInfo(fileData).IsDir() {
 				if m.removed != nil {
 					m.removed.Add(1)
 				}
@@ -354,7 +354,8 @@ func (m *MemMapFs) Rename(oldname, newname string) error {
 
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	if _, ok := m.getData()[oldname]; ok {
+	_, ok := m.getData()[oldname]
+	if ok {
 		m.mu.RUnlock()
 		m.mu.Lock()
 		err := m.unRegisterWithParent(oldname)
@@ -364,35 +365,39 @@ func (m *MemMapFs) Rename(oldname, newname string) error {
 			return err
 		}
 
-		fileData := m.getData()[oldname]
-		mem.ChangeFileName(fileData, newname)
-		m.getData()[newname] = fileData
+		var fileData *mem.FileData
+		fileData, ok = m.getData()[oldname]
+		if ok {
+			mem.ChangeFileName(fileData, newname)
+			m.getData()[newname] = fileData
 
-		err = m.renameDescendants(oldname, newname)
-		if err != nil {
+			err = m.renameDescendants(oldname, newname)
+			if err != nil {
+				m.mu.Unlock()
+				m.mu.RLock()
+				return err
+			}
+
+			delete(m.getData(), oldname)
+
+			m.registerWithParent(fileData, 0)
 			m.mu.Unlock()
 			m.mu.RLock()
-			return err
-		}
 
-		delete(m.getData(), oldname)
-
-		m.registerWithParent(fileData, 0)
-		m.mu.Unlock()
-		m.mu.RLock()
-
-		if !mem.GetFileInfo(fileData).IsDir() {
-			if m.removed != nil {
-				m.removed.Add(1)
-			}
-			if m.created != nil {
-				m.created.Add(1)
-			}
-			if m.log != nil {
-				m.log.Trace("file renamed", "oldname", oldname, "newname", newname)
+			if !mem.GetFileInfo(fileData).IsDir() {
+				if m.removed != nil {
+					m.removed.Add(1)
+				}
+				if m.created != nil {
+					m.created.Add(1)
+				}
+				if m.log != nil {
+					m.log.Trace("file renamed", "oldname", oldname, "newname", newname)
+				}
 			}
 		}
-	} else {
+	}
+	if !ok {
 		return &os.PathError{Op: "rename", Path: oldname, Err: ErrFileNotFound}
 	}
 	return nil
@@ -431,26 +436,28 @@ func (m *MemMapFs) Link(oldname, newname string) error {
 
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	if _, ok := m.getData()[oldname]; ok {
+	_, ok := m.getData()[newname]
+	if ok {
+		return &os.PathError{Op: "link", Path: newname, Err: ErrFileExists}
+	}
+	fileData, ok := m.getData()[oldname]
+	if mem.GetFileInfo(fileData).IsDir() {
+		return &os.PathError{Op: "link", Path: oldname, Err: syscall.EPERM}
+	}
+	if ok {
 		m.mu.RUnlock()
 		m.mu.Lock()
 
-		fileData := m.getData()[oldname]
-		fileData = mem.CreateLink(fileData, newname)
-		m.getData()[newname] = fileData
+		var fileData *mem.FileData
+		fileData, ok = m.getData()[oldname]
+		if ok {
+			fileData = mem.CreateLink(fileData, newname)
+			m.getData()[newname] = fileData
 
-		err := m.linkDescendants(oldname, newname)
-		if err != nil {
+			m.registerWithParent(fileData, 0)
 			m.mu.Unlock()
 			m.mu.RLock()
-			return err
-		}
 
-		m.registerWithParent(fileData, 0)
-		m.mu.Unlock()
-		m.mu.RLock()
-
-		if !mem.GetFileInfo(fileData).IsDir() {
 			if m.created != nil {
 				m.created.Add(1)
 			}
@@ -458,23 +465,10 @@ func (m *MemMapFs) Link(oldname, newname string) error {
 				m.log.Trace("file linked", "oldname", oldname, "newname", newname)
 			}
 		}
-	} else {
+	}
+	if !ok {
 		return &os.PathError{Op: "link", Path: oldname, Err: ErrFileNotFound}
 	}
-	return nil
-}
-
-func (m *MemMapFs) linkDescendants(oldname, newname string) error {
-	descendants := m.findDescendants(oldname)
-	for _, desc := range descendants {
-		descNewName := strings.Replace(desc.Name(), oldname, newname, 1)
-
-		fileData := mem.CreateLink(desc, descNewName)
-		m.getData()[descNewName] = fileData
-
-		m.registerWithParent(fileData, 0)
-	}
-
 	return nil
 }
 

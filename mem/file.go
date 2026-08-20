@@ -186,6 +186,11 @@ func (f *File) Sync() error {
 }
 
 func (f *File) Readdir(count int) (res []os.FileInfo, err error) {
+	f.fileData.RLock()
+	defer f.fileData.RUnlock()
+	if f.closed {
+		return nil, ErrFileClosed
+	}
 	if !f.fileData.dir {
 		return nil, &os.PathError{
 			Op:   "readdir",
@@ -195,7 +200,6 @@ func (f *File) Readdir(count int) (res []os.FileInfo, err error) {
 	}
 	var outLength int64
 
-	f.fileData.RLock()
 	f.dirBufOnce.Do(func() {
 		f.dirBuf = f.fileData.memDir.Files()
 	})
@@ -214,7 +218,6 @@ func (f *File) Readdir(count int) (res []os.FileInfo, err error) {
 		outLength = int64(len(files))
 	}
 	atomic.StoreInt64(&f.readDirCount, cur+outLength)
-	f.fileData.RUnlock()
 
 	res = make([]os.FileInfo, outLength)
 	for i := range res {
@@ -247,12 +250,12 @@ func (f *File) ReadDir(n int) ([]fs.DirEntry, error) {
 }
 
 func (f *File) Read(b []byte) (n int, err error) {
+	f.fileData.RLock()
+	defer f.fileData.RUnlock()
 	if f.closed {
 		return 0, ErrFileClosed
 	}
 	cur := atomic.LoadInt64(&f.at)
-	f.fileData.RLock()
-	defer f.fileData.RUnlock()
 	f.fileData.data.RLock()
 	defer f.fileData.data.RUnlock()
 	if len(b) > 0 && int(cur) == len(f.fileData.data.d) {
@@ -280,6 +283,8 @@ func (f *File) ReadAt(b []byte, off int64) (n int, err error) {
 }
 
 func (f *File) Truncate(size int64) error {
+	f.fileData.Lock()
+	defer f.fileData.Unlock()
 	if f.closed {
 		return ErrFileClosed
 	}
@@ -293,8 +298,6 @@ func (f *File) Truncate(size int64) error {
 	if size < 0 {
 		return ErrOutOfRange
 	}
-	f.fileData.Lock()
-	defer f.fileData.Unlock()
 	f.fileData.data.Lock()
 	defer f.fileData.data.Unlock()
 	if size > int64(len(f.fileData.data.d)) {
@@ -308,6 +311,8 @@ func (f *File) Truncate(size int64) error {
 }
 
 func (f *File) Seek(offset int64, whence int) (int64, error) {
+	f.fileData.RLock()
+	defer f.fileData.RUnlock()
 	if f.closed {
 		return 0, ErrFileClosed
 	}
@@ -327,6 +332,8 @@ func (f *File) Seek(offset int64, whence int) (int64, error) {
 }
 
 func (f *File) Write(b []byte) (n int, err error) {
+	f.fileData.Lock()
+	defer f.fileData.Unlock()
 	if f.closed {
 		return 0, ErrFileClosed
 	}
@@ -339,8 +346,6 @@ func (f *File) Write(b []byte) (n int, err error) {
 	}
 	n = len(b)
 	cur := atomic.LoadInt64(&f.at)
-	f.fileData.Lock()
-	defer f.fileData.Unlock()
 	f.fileData.data.Lock()
 	defer f.fileData.data.Unlock()
 	diff := cur - int64(len(f.fileData.data.d))

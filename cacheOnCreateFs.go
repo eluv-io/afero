@@ -99,6 +99,7 @@ func (u *CacheOnCreateFs) Create(name string) (f File, err error) {
 	lf, err := u.layer.Create(name)
 	if err != nil {
 		// oops, should we remove? then we have to remember if the file did not exist before
+		decrement()
 		_ = bf.Close()
 		return nil, err
 	}
@@ -122,6 +123,9 @@ func (u *CacheOnCreateFs) Open(name string) (f File, err error) {
 		decrement()
 	}
 	if err != nil && !isNotExist(err) {
+		if bf != nil {
+			_ = bf.Close()
+		}
 		return nil, err
 	}
 
@@ -167,6 +171,9 @@ func (u *CacheOnCreateFs) OpenFile(name string, flag int, perm os.FileMode) (f F
 		decrement()
 	}
 	if err != nil && !isNotExist(err) {
+		if bf != nil {
+			_ = bf.Close()
+		}
 		return nil, err
 	}
 
@@ -302,15 +309,32 @@ type cacheFiles struct {
 type cacheFile struct {
 	name       string
 	expiration time.Time
+	prev       *cacheFile
 	next       *cacheFile
 }
 
 // Add pushes the given cache file to the back of the cache file list.
 func (c *cacheFiles) Add(name string) {
 	if c.ttl > 0 {
+		name = filepath.Clean(name)
 		c.mutex.Lock()
 		defer c.mutex.Unlock()
-		cfile := &cacheFile{name: filepath.Clean(name), expiration: time.Now().Add(c.ttl)}
+		for curr := c.head; curr != nil; curr = curr.next {
+			if curr.name == name {
+				if curr == c.head {
+					c.head = curr.next
+				} else {
+					curr.prev.next = curr.next
+				}
+				if curr == c.tail {
+					c.tail = curr.prev
+				} else {
+					curr.next.prev = curr.prev
+				}
+				break
+			}
+		}
+		cfile := &cacheFile{name: name, expiration: time.Now().Add(c.ttl), prev: c.tail}
 		if c.tail == nil {
 			c.head = cfile
 		} else {
