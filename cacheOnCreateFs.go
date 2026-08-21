@@ -352,7 +352,10 @@ func (c *cacheFiles) Next() *cacheFile {
 	if c.head != nil {
 		cfile = c.head
 		c.head = cfile.next
-		if c.head == nil {
+		cfile.next = nil
+		if c.head != nil {
+			c.head.prev = nil
+		} else {
 			c.tail = nil
 		}
 	}

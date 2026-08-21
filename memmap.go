@@ -288,28 +288,37 @@ func (m *MemMapFs) OpenFile(name string, flag int, perm os.FileMode) (File, erro
 func (m *MemMapFs) Remove(name string) error {
 	name = normalizePath(name)
 
-	m.mu.Lock()
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var report bool
+	_, ok := m.getData()[name]
+	if ok {
+		m.mu.RUnlock()
+		m.mu.Lock()
 
-	if _, ok := m.getData()[name]; ok {
 		err := m.unRegisterWithParent(name)
 		if err != nil {
 			m.mu.Unlock()
+			m.mu.RLock()
 			return &os.PathError{Op: "remove", Path: name, Err: err}
 		}
-		fileData := m.getData()[name]
+		var fileData *mem.FileData
+		fileData, ok = m.getData()[name]
 		delete(m.getData(), name)
+		report = ok && !mem.GetFileInfo(fileData).IsDir()
+
 		m.mu.Unlock()
-		if !mem.GetFileInfo(fileData).IsDir() {
-			if m.removed != nil {
-				m.removed.Add(1)
-			}
-			if m.log != nil {
-				m.log.Trace("file removed", "name", name)
-			}
+		m.mu.RLock()
+	}
+	if !ok {
+		return &os.PathError{Op: "remove", Path: name, Err: ErrFileNotFound}
+	} else if report {
+		if m.removed != nil {
+			m.removed.Add(1)
 		}
-	} else {
-		m.mu.Unlock()
-		return &os.PathError{Op: "remove", Path: name, Err: os.ErrNotExist}
+		if m.log != nil {
+			m.log.Trace("file removed", "name", name)
+		}
 	}
 	return nil
 }
@@ -329,9 +338,10 @@ func (m *MemMapFs) RemoveAll(path string) error {
 			m.mu.Lock()
 			fileData, ok := m.getData()[p]
 			delete(m.getData(), p)
+			report := ok && !mem.GetFileInfo(fileData).IsDir()
 			m.mu.Unlock()
 			m.mu.RLock()
-			if ok && !mem.GetFileInfo(fileData).IsDir() {
+			if report {
 				if m.removed != nil {
 					m.removed.Add(1)
 				}
@@ -354,51 +364,53 @@ func (m *MemMapFs) Rename(oldname, newname string) error {
 
 	m.mu.RLock()
 	defer m.mu.RUnlock()
+	var report bool
+	removed := 1.0
 	_, ok := m.getData()[oldname]
 	if ok {
 		m.mu.RUnlock()
 		m.mu.Lock()
+
 		err := m.unRegisterWithParent(oldname)
 		if err != nil {
 			m.mu.Unlock()
 			m.mu.RLock()
-			return err
+			return &os.PathError{Op: "rename", Path: oldname, Err: err}
 		}
-
 		var fileData *mem.FileData
 		fileData, ok = m.getData()[oldname]
 		if ok {
+			if fd, exists := m.getData()[newname]; exists && !mem.GetFileInfo(fd).IsDir() {
+				removed++
+			}
 			mem.ChangeFileName(fileData, newname)
 			m.getData()[newname] = fileData
-
 			err = m.renameDescendants(oldname, newname)
 			if err != nil {
 				m.mu.Unlock()
 				m.mu.RLock()
-				return err
+				return &os.PathError{Op: "rename", Path: oldname, Err: err}
 			}
-
 			delete(m.getData(), oldname)
-
 			m.registerWithParent(fileData, 0)
-			m.mu.Unlock()
-			m.mu.RLock()
-
-			if !mem.GetFileInfo(fileData).IsDir() {
-				if m.removed != nil {
-					m.removed.Add(1)
-				}
-				if m.created != nil {
-					m.created.Add(1)
-				}
-				if m.log != nil {
-					m.log.Trace("file renamed", "oldname", oldname, "newname", newname)
-				}
-			}
+			report = !mem.GetFileInfo(fileData).IsDir()
 		}
+
+		m.mu.Unlock()
+		m.mu.RLock()
 	}
 	if !ok {
 		return &os.PathError{Op: "rename", Path: oldname, Err: ErrFileNotFound}
+	} else if report {
+		if m.removed != nil {
+			m.removed.Add(removed)
+		}
+		if m.created != nil {
+			m.created.Add(1)
+		}
+		if m.log != nil {
+			m.log.Trace("file renamed", "oldname", oldname, "newname", newname)
+		}
 	}
 	return nil
 }
@@ -434,40 +446,51 @@ func (m *MemMapFs) Link(oldname, newname string) error {
 		return nil
 	}
 
+	validateFiles := func() (*mem.FileData, error) {
+		var err error
+		var errPath string
+		if _, ok := m.getData()[newname]; ok {
+			err = ErrFileExists
+			errPath = newname
+		} else if fileData, ok := m.getData()[oldname]; !ok {
+			err = ErrFileNotFound
+			errPath = oldname
+		} else if mem.GetFileInfo(fileData).IsDir() {
+			err = syscall.EPERM
+			errPath = oldname
+		} else {
+			return fileData, nil
+		}
+		return nil, &os.PathError{Op: "link", Path: errPath, Err: err}
+	}
+
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	_, ok := m.getData()[newname]
-	if ok {
-		return &os.PathError{Op: "link", Path: newname, Err: ErrFileExists}
-	}
-	fileData, ok := m.getData()[oldname]
-	if mem.GetFileInfo(fileData).IsDir() {
-		return &os.PathError{Op: "link", Path: oldname, Err: syscall.EPERM}
-	}
-	if ok {
+	_, err := validateFiles()
+	if err == nil {
 		m.mu.RUnlock()
 		m.mu.Lock()
 
 		var fileData *mem.FileData
-		fileData, ok = m.getData()[oldname]
-		if ok {
+		fileData, err = validateFiles()
+		if err == nil {
 			fileData = mem.CreateLink(fileData, newname)
 			m.getData()[newname] = fileData
-
 			m.registerWithParent(fileData, 0)
-			m.mu.Unlock()
-			m.mu.RLock()
-
-			if m.created != nil {
-				m.created.Add(1)
-			}
-			if m.log != nil {
-				m.log.Trace("file linked", "oldname", oldname, "newname", newname)
-			}
 		}
+
+		m.mu.Unlock()
+		m.mu.RLock()
 	}
-	if !ok {
-		return &os.PathError{Op: "link", Path: oldname, Err: ErrFileNotFound}
+	if err != nil {
+		return err
+	} else {
+		if m.created != nil {
+			m.created.Add(1)
+		}
+		if m.log != nil {
+			m.log.Trace("file linked", "oldname", oldname, "newname", newname)
+		}
 	}
 	return nil
 }
