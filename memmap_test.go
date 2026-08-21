@@ -1002,3 +1002,83 @@ func TestMemMapFsLink(t *testing.T) {
 	}
 	defer f3.Close()
 }
+
+func TestMemMapFsLinkDirectoryFails(t *testing.T) {
+	t.Parallel()
+
+	fs := NewMemMapFs()
+
+	dn := "dir"
+	if err := fs.Mkdir(dn, 0o755); err != nil {
+		t.Fatalf("Mkdir failed: %s", err)
+	}
+
+	dn2 := "dirlink"
+	err := fs.Link(dn, dn2)
+	if err == nil {
+		t.Fatal("Link on a directory should have failed")
+	}
+
+	// dn2 must not exist as a side effect of the rejected Link.
+	if _, err := fs.Stat(dn2); !os.IsNotExist(err) {
+		t.Fatalf("expected %q not to exist, got err=%v", dn2, err)
+	}
+
+	// A file written only under dn2 (had Link wrongly succeeded and shared the DirMap) must not
+	// leak into dn.
+	fn := filepath.Join(dn, "existing.txt")
+	if err := WriteFile(fs, fn, []byte("hi"), 0o644); err != nil {
+		t.Fatalf("WriteFile failed: %s", err)
+	}
+	entries, err := ReadDir(fs, dn)
+	if err != nil {
+		t.Fatalf("ReadDir failed: %s", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 entry in %q, got %d: %v", dn, len(entries), entries)
+	}
+}
+
+func TestMemMapFsLinkExistingNewnameFails(t *testing.T) {
+	t.Parallel()
+
+	fs := NewMemMapFs()
+
+	fn1, d1 := "a.txt", []byte("AAAA")
+	if err := WriteFile(fs, fn1, d1, 0o644); err != nil {
+		t.Fatalf("WriteFile failed: %s", err)
+	}
+
+	fn2, d2 := "b.txt", []byte("BBBB")
+	if err := WriteFile(fs, fn2, d2, 0o644); err != nil {
+		t.Fatalf("WriteFile failed: %s", err)
+	}
+
+	if err := fs.Link(fn1, fn2); err == nil {
+		t.Fatal("Link onto an existing newname should have failed")
+	}
+
+	got, err := ReadFile(fs, fn2)
+	if err != nil {
+		t.Fatalf("ReadFile failed: %s", err)
+	}
+	if string(got) != string(d2) {
+		t.Fatalf("expected %q to be untouched (%q), got %q", fn2, d2, got)
+	}
+}
+
+// TestMemMapFsLinkNonexistentOldnameFails guards against a nil-pointer panic when oldname doesn't
+// exist: Link must check that oldname was found before calling IsDir() on it.
+func TestMemMapFsLinkNonexistentOldnameFails(t *testing.T) {
+	t.Parallel()
+
+	fs := NewMemMapFs()
+
+	err := fs.Link("does-not-exist.txt", "newname.txt")
+	if err == nil {
+		t.Fatal("Link with a nonexistent oldname should have failed")
+	}
+	if !os.IsNotExist(err) {
+		t.Fatalf("expected a not-exist error, got %v", err)
+	}
+}

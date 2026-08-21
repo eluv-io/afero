@@ -438,6 +438,10 @@ func (m *MemMapFs) renameDescendants(oldname, newname string) error {
 	return nil
 }
 
+// Link creates a hardlink to a file. Linking a directory, or linking onto an existing newname, is
+// rejected: neither is supported by real hardlinks (link(2) returns EPERM/EEXIST respectively),
+// and MemMapFs.CreateLink shares the directory's underlying DirMap by reference, so silently
+// allowing a directory link would make both paths mutate the same directory contents.
 func (m *MemMapFs) Link(oldname, newname string) error {
 	oldname = normalizePath(oldname)
 	newname = normalizePath(newname)
