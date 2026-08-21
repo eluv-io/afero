@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"sync"
 	"testing"
 	"time"
 )
@@ -205,6 +206,32 @@ func TestFileDataSizeRace(t *testing.T) {
 	if s.Size() != int64(42) {
 		t.Errorf("Failed to read correct value for dir, was %v", s.Size())
 	}
+}
+
+// TestFileSeekEndWriteRace guards against a data race between Seek(io.SeekEnd) and Write on an
+// ordinary (non-hardlinked) file, where fileBytes.m is nil and its Lock/RLock are no-ops, so the
+// length read in Seek must be protected by FileData's own RWMutex like Write/Truncate are.
+func TestFileSeekEndWriteRace(t *testing.T) {
+	t.Parallel()
+
+	f := NewFileHandle(CreateFile("seek-write-race.txt"))
+	defer f.Close()
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 1000; i++ {
+			_, _ = f.Write([]byte("hello"))
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 1000; i++ {
+			_, _ = f.Seek(0, io.SeekEnd)
+		}
+	}()
+	wg.Wait()
 }
 
 func TestFileReaddirBuffer(t *testing.T) {
