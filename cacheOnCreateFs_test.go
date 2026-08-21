@@ -265,6 +265,71 @@ func TestCacheOnCreateFsClose(t *testing.T) {
 	require.NoError(t, composite.Close()) // Close must be idempotent
 }
 
+// requireCacheFilesInvariants walks the cacheFiles list forward and backward and checks that the
+// doubly-linked structure is internally consistent: head.prev and tail.next are nil, and every
+// adjacent pair of nodes points back at each other correctly.
+func requireCacheFilesInvariants(t *testing.T, c *cacheFiles, step string) {
+	if c.head != nil {
+		require.Nilf(t, c.head.prev, "%s: head.prev should be nil", step)
+	}
+	if c.tail != nil {
+		require.Nilf(t, c.tail.next, "%s: tail.next should be nil", step)
+	}
+
+	const maxNodes = 100 // generous bound; exceeding it means the list has a cycle
+	seen := map[string]bool{}
+	var forward, backward int
+	for n := c.head; n != nil; n, forward = n.next, forward+1 {
+		require.Lessf(t, forward, maxNodes, "%s: list appears to have a cycle", step)
+		require.Falsef(t, seen[n.name], "%s: duplicate name %q in forward walk", step, n.name)
+		seen[n.name] = true
+		if n.next != nil {
+			require.Samef(t, n, n.next.prev, "%s: node %q: n.next.prev != n", step, n.name)
+		}
+		if n.prev != nil {
+			require.Samef(t, n, n.prev.next, "%s: node %q: n.prev.next != n", step, n.name)
+		}
+	}
+	for n := c.tail; n != nil; n, backward = n.prev, backward+1 {
+		require.Lessf(t, backward, maxNodes, "%s: backward walk has a cycle", step)
+	}
+	require.Equalf(t, forward, backward, "%s: forward count != backward count", step)
+}
+
+// TestCacheFilesInvariants guards against a corruption in the cacheFiles doubly-linked list where
+// Next() popped the head without clearing the new head's prev pointer, leaving it dangling at the
+// removed node; a later Add() re-adding that (now) head's name propagated the stale pointer
+// further into the list.
+func TestCacheFilesInvariants(t *testing.T) {
+	c := &cacheFiles{ttl: time.Hour}
+	names := []string{"a", "b", "c", "d", "e"}
+
+	for _, n := range names {
+		c.Add(n)
+	}
+	requireCacheFilesInvariants(t, c, "after initial adds")
+
+	// Re-add head, middle, and tail entries to exercise dedup-unlink in every list position.
+	for _, n := range []string{"a", "c", "e", "a", "e", "c"} {
+		c.Add(n)
+		requireCacheFilesInvariants(t, c, "after re-add "+n)
+	}
+
+	// Pop everything via Next(), re-adding a still-present name after each pop to exercise
+	// head-dedup immediately after Next() has run.
+	for i := 0; i < len(names)*2; i++ {
+		cfile := c.Next()
+		if cfile == nil {
+			break
+		}
+		requireCacheFilesInvariants(t, c, "after Next() popped "+cfile.name)
+		if cfile.name != "d" {
+			c.Add("d")
+			requireCacheFilesInvariants(t, c, "after re-add d post-Next")
+		}
+	}
+}
+
 func requireFileCreate(t *testing.T, fs Fs, fp string, d []byte) File {
 	f, err := fs.Create(fp)
 	require.NoError(t, err)
