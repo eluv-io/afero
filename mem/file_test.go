@@ -209,7 +209,7 @@ func TestFileDataSizeRace(t *testing.T) {
 }
 
 // TestFileSeekEndWriteRace guards against a data race between Seek(io.SeekEnd) and Write on an
-// ordinary (non-hardlinked) file, where fileBytes.m is nil and its Lock/RLock are no-ops, so the
+// ordinary (non-hard-linked) file, where fileBytes.m is nil and its Lock/RLock are no-ops, so the
 // length read in Seek must be protected by FileData's own RWMutex like Write/Truncate are.
 func TestFileSeekEndWriteRace(t *testing.T) {
 	t.Parallel()
