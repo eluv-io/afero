@@ -17,7 +17,6 @@ func TestCacheOnCreate(t *testing.T) {
 	base := NewOsFs()
 	layer := NewMemMapFs()
 	composite := NewCacheOnCreateFs(base, layer, cacheTime)
-	defer composite.Close()
 
 	dir, err := TempDir(composite, "", "cache-on-create-test")
 	require.NoError(t, err)
@@ -256,13 +255,6 @@ func TestCacheOnCreate(t *testing.T) {
 	requireFileExist(t, composite, fp2, d2)
 	// Dir in composite fs should have both files
 	requireDirRead(t, composite, dp2, map[string][]byte{fp: d, fp2: d2})
-}
-
-func TestCacheOnCreateFsClose(t *testing.T) {
-	composite := NewCacheOnCreateFs(NewOsFs(), NewMemMapFs(), time.Millisecond*50)
-
-	require.NoError(t, composite.Close())
-	require.NoError(t, composite.Close()) // Close must be idempotent
 }
 
 // requireCacheFilesInvariants walks the cacheFiles list forward and backward and checks that the

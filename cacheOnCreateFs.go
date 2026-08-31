@@ -29,80 +29,60 @@ import (
 // after the layer filesystem. To prevent writing to the base Fs, wrap it in a
 // read-only filter.
 type CacheOnCreateFs struct {
-	base      Fs
-	layer     Fs
-	files     *cacheFiles
-	refs      *cacheRefs
-	ttl       time.Duration
-	stop      chan struct{}
-	closeOnce sync.Once
+	base  Fs
+	layer Fs
+	files *cacheFiles
+	refs  *cacheRefs
+	ttl   time.Duration
 }
 
-func NewCacheOnCreateFs(base Fs, layer Fs, cacheTime time.Duration) *CacheOnCreateFs {
+func NewCacheOnCreateFs(base Fs, layer Fs, cacheTime time.Duration) Fs {
 	u := &CacheOnCreateFs{
 		base:  base,
 		layer: layer,
 		files: &cacheFiles{ttl: cacheTime},
 		refs:  &cacheRefs{},
 		ttl:   cacheTime,
-		stop:  make(chan struct{}),
 	}
 	if cacheTime > 0 {
-		go u.expireLoop()
+		go func() {
+			// Remove expired files in cache file list
+			// Since cache time is fixed, cache files in the list will expire in order and so can be processed in order
+			for {
+				cfile := u.files.Next()
+				if cfile == nil {
+					// Cache file list is empty; can sleep for cache time and re-check
+					time.Sleep(u.ttl)
+				} else {
+					now := time.Now()
+					if cfile.expiration.After(now) {
+						// Cache file not expired yet; wait for expiration
+						time.Sleep(cfile.expiration.Sub(now))
+					}
+					// Cache file expired
+					var retry bool
+					count, release := u.refs.Check(cfile.name)
+					if count > 0 {
+						// Layer file handle still open; retry later
+						retry = true
+					} else {
+						err := u.layer.Remove(cfile.name)
+						if err != nil && !isNotExist(err) { // Ignore file if already removed (or renamed)
+							// Log error and retry later
+							log.Warn("afero.CacheOnCreateFs: failed to remove cached file",
+								err, "file", cfile.name)
+							retry = true
+						}
+					}
+					release()
+					if retry {
+						u.files.Add(cfile.name)
+					}
+				}
+			}
+		}()
 	}
 	return u
-}
-
-// Close stops the background cache-expiry goroutine started when cacheTime > 0. It is safe to
-// call more than once. The Fs itself remains usable for I/O afterward; it just no longer evicts
-// expired files from the cache layer.
-func (u *CacheOnCreateFs) Close() error {
-	u.closeOnce.Do(func() { close(u.stop) })
-	return nil
-}
-
-// expireLoop removes expired files from the cache file list. Since cache time is fixed, cache
-// files in the list expire in order and so can be processed in order.
-func (u *CacheOnCreateFs) expireLoop() {
-	for {
-		cfile := u.files.Next()
-		if cfile == nil {
-			// Cache file list is empty; can wait for cache time and re-check
-			select {
-			case <-time.After(u.ttl):
-			case <-u.stop:
-				return
-			}
-			continue
-		}
-		if wait := cfile.expiration.Sub(time.Now()); wait > 0 {
-			// Cache file not expired yet; wait for expiration
-			select {
-			case <-time.After(wait):
-			case <-u.stop:
-				return
-			}
-		}
-		// Cache file expired
-		var retry bool
-		count, release := u.refs.Check(cfile.name)
-		if count > 0 {
-			// Layer file handle still open; retry later
-			retry = true
-		} else {
-			err := u.layer.Remove(cfile.name)
-			if err != nil && !isNotExist(err) { // Ignore file if already removed (or renamed)
-				// Log error and retry later
-				log.Warn("afero.CacheOnCreateFs: failed to remove cached file",
-					err, "file", cfile.name)
-				retry = true
-			}
-		}
-		release()
-		if retry {
-			u.files.Add(cfile.name)
-		}
-	}
 }
 
 func (u *CacheOnCreateFs) Name() string {
