@@ -394,6 +394,10 @@ func (fs *Fs) Rename(oldName, newName string) error {
 	return src.Delete(fs.ctx)
 }
 
+func (fs *Fs) Link(_, _ string) error {
+	return errors.New("method Link is not implemented in GCS")
+}
+
 func (fs *Fs) Stat(name string) (os.FileInfo, error) {
 	name = fs.ensureNoLeadingSeparator(fs.normSeparators(ensureNoPrefix(name)))
 	if err := validateName(name); err != nil {

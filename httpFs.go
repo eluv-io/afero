@@ -109,6 +109,10 @@ func (h HttpFs) Rename(oldname, newname string) error {
 	return h.source.Rename(oldname, newname)
 }
 
+func (h HttpFs) Link(oldname, newname string) error {
+	return h.source.Link(oldname, newname)
+}
+
 func (h HttpFs) Stat(name string) (os.FileInfo, error) {
 	return h.source.Stat(name)
 }

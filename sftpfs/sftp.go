@@ -120,6 +120,10 @@ func (s Fs) Rename(oldname, newname string) error {
 	return s.client.Rename(oldname, newname)
 }
 
+func (s Fs) Link(oldname, newname string) error {
+	return s.client.Link(oldname, newname)
+}
+
 func (s Fs) Stat(name string) (os.FileInfo, error) {
 	return s.client.Stat(name)
 }

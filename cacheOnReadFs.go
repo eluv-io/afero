@@ -176,6 +176,27 @@ func (u *CacheOnReadFs) Rename(oldname, newname string) error {
 	return u.layer.Rename(oldname, newname)
 }
 
+func (u *CacheOnReadFs) Link(oldname, newname string) error {
+	st, _, err := u.cacheStatus(oldname)
+	if err != nil {
+		return err
+	}
+	switch st {
+	case cacheLocal:
+	case cacheHit:
+		err = u.base.Link(oldname, newname)
+	case cacheStale, cacheMiss:
+		if err := u.copyToLayer(oldname); err != nil {
+			return err
+		}
+		err = u.base.Link(oldname, newname)
+	}
+	if err != nil {
+		return err
+	}
+	return u.layer.Link(oldname, newname)
+}
+
 func (u *CacheOnReadFs) Remove(name string) error {
 	st, _, err := u.cacheStatus(name)
 	if err != nil {

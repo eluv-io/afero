@@ -117,6 +117,10 @@ func (fs *GcsFs) Rename(oldname, newname string) error {
 	return fs.source.Rename(oldname, newname)
 }
 
+func (fs *GcsFs) Link(oldname, newname string) error {
+	return fs.source.Link(oldname, newname)
+}
+
 func (fs *GcsFs) Stat(name string) (os.FileInfo, error) {
 	return fs.source.Stat(name)
 }

@@ -197,6 +197,10 @@ func (f FromIOFS) Rename(oldname, newname string) error {
 	return notImplemented("rename", oldname)
 }
 
+func (f FromIOFS) Link(oldname, newname string) error {
+	return notImplemented("link", oldname)
+}
+
 func (f FromIOFS) Stat(name string) (os.FileInfo, error) { return fs.Stat(f.FS, name) }
 
 func (f FromIOFS) Name() string { return "fromiofs" }

@@ -173,6 +173,18 @@ func (u *CopyOnWriteFs) Rename(oldname, newname string) error {
 	return u.layer.Rename(oldname, newname)
 }
 
+// Linking files present only in the base layer is not permitted
+func (u *CopyOnWriteFs) Link(oldname, newname string) error {
+	b, err := u.isBaseFile(oldname)
+	if err != nil {
+		return err
+	}
+	if b {
+		return syscall.EPERM
+	}
+	return u.layer.Link(oldname, newname)
+}
+
 // Removing files present only in the base layer is not permitted. If
 // a file is present in the base layer and the overlay, only the overlay
 // will be removed.

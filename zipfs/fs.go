@@ -80,6 +80,8 @@ func (fs *Fs) RemoveAll(path string) error { return syscall.EPERM }
 
 func (fs *Fs) Rename(oldname, newname string) error { return syscall.EPERM }
 
+func (fs *Fs) Link(oldname, newname string) error { return syscall.EPERM }
+
 type pseudoRoot struct{}
 
 func (p *pseudoRoot) Name() string       { return string(filepath.Separator) }
